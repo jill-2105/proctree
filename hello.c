@@ -4,7 +4,6 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include <dirent.h>
-#include <fcntl.h>
 #include <time.h>
 #include <signal.h>
 #include <sys/stat.h>
@@ -225,14 +224,131 @@ void handle_dnd(pid_t root, pid_t target) {
     free_list(&descendants);
 }
 
-// 7. Kills the grandparent of process_id 
-void handle_kgp(pid_t root, pid_t target) {
-    
+// Helper to check if process is not a bash process or init process
+bool can_kill_process(pid_t pid, const char* role) {
+    if (pid <= 1) {
+        printf("%s is a INIT process and will not be terminated\n", role);
+        return false;
+    }
+    char path[256];
+    snprintf(path, sizeof(path), "/proc/%d/comm", pid);
+    FILE *f = fopen(path, "r");
+    if (!f) return false; // Simplified: no print, just fail
+    char comm[18];
+    fgets(comm, sizeof(comm), f);
+    fclose(f);
+    if (strstr(comm, "bash")) {
+        printf("%s is BASH process and will not be terminated\n", role);
+        return false;
+    }
+    return true;
 }
 
-// 8. Kills the parent of process_id 
-void handle_kpp(pid_t root, pid_t target) {
+// 7. Kills the grandparent of process_id 
+void handle_kgp(pid_t root, pid_t target) {
+    pid_t parent = get_ppid(target);
+        if (parent == -1) {
+            printf("No parent for process %d\n", target);
+            return;
+        }
 
+    pid_t grandparent = get_ppid(parent);
+        if (grandparent == -1) {
+            printf("No grandparent for process %d\n", target);
+            return;
+        }
+
+    if (can_kill_process(grandparent, "Grandparent")) {
+        printf("Killing grandparent %d\n", grandparent);
+        if (kill(grandparent, SIGKILL)==0) {
+             printf("%d is terminated\n", grandparent);
+        } else {
+            printf("Failed to kill grandparent\n");
+        }
+    }
+}
+
+// 8. Kills the parent of process_id
+void handle_kpp(pid_t root, pid_t target) {
+    pid_t parent = get_ppid(target);
+    if (parent == -1) {
+        printf("No parent for process %d\n", target);
+        return;
+    }
+
+   if (can_kill_process(parent, "Parent")) {
+        printf("Killing parent %d\n", parent);
+        if (kill(parent, SIGKILL)==0) {
+             printf("%d is terminated\n", parent);
+        } else {
+            printf("Failed to kill parent\n");
+        }
+    }
+}
+
+
+// 9. Kills the siblings of process_id
+void handle_ksp(pid_t root, pid_t target) {
+    pid_t parent = get_ppid(target);
+    if (parent == -1) {
+        printf("No parent for process %d\n", target);
+        return;
+    }
+
+    int parent_index = find_proc_index(parent);
+    if (parent_index == -1) {
+        printf("Parent process %d not found\n", parent);
+        return;
+    }
+
+    ChildNode *child = children[parent_index];
+    while (child != NULL) {
+        pid_t sibling_pid = procs[child->proc_index].pid;
+        if (sibling_pid != target && can_kill_process(sibling_pid, "Sibling")) {
+            printf("Killing sibling %d\n", sibling_pid);
+            if (kill(sibling_pid, SIGKILL)==0) {
+                 printf("%d is terminated\n", sibling_pid);
+            } else {
+                printf("Failed to kill sibling %d\n", sibling_pid);
+            }
+        }
+        child = child->next;
+    }
+}
+
+// 10. Kills the siblings of process_id parent
+void handle_kps(pid_t root, pid_t target) {
+    pid_t parent = get_ppid(target);
+    if (parent == -1) {
+        printf("No parent for process %d\n", target);
+        return;
+    }
+
+    pid_t grandparent = get_ppid(parent);
+    if (grandparent == -1) {
+        printf("No grandparent for process %d\n", target);
+        return;
+    }
+
+    int grandparent_index = find_proc_index(grandparent);
+    if (grandparent_index == -1) {
+        printf("Grandparent process %d not found\n", grandparent);
+        return;
+    }
+
+    ChildNode *child = children[grandparent_index];
+    while (child != NULL) {
+        pid_t uncle_aunt_pid = procs[child->proc_index].pid;
+        if (uncle_aunt_pid != parent && can_kill_process(uncle_aunt_pid, "Uncle/Aunt")) {
+            printf("Killing uncle/aunt %d\n", uncle_aunt_pid);
+            if (kill(uncle_aunt_pid, SIGKILL)==0) {
+                 printf("%d is terminated\n", uncle_aunt_pid);
+            } else {
+                printf("Failed to kill uncle/aunt %d\n", uncle_aunt_pid);
+            }
+        }
+        child = child->next;
+    }
 }
 
 int main(int num_args, char *arguments[]) {
@@ -326,6 +442,18 @@ int main(int num_args, char *arguments[]) {
                         
                         case 8: // 8. Kills the parent of process_id
                             handle_kpp(root_process, process_id);
+                            break;
+
+                        case 8: // 8. Kills the parent of process_id
+                            handle_kpp(root_process, process_id);
+                            break;
+
+                        case 9: // 9. Kills the siblings of process_id
+                            handle_ksp(root_process, process_id);
+                            break;
+
+                        case 10: // 10. Kills the children of process_id
+                            handle_kps(root_process, process_id);
                             break;
 
                         default:
