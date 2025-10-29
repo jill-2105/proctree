@@ -19,6 +19,7 @@
 #define HZ 100
 #define INITIAL_CAPACITY 1024
 
+// ProcInfo Structure
 typedef struct {
     pid_t pid;
     pid_t ppid;
@@ -30,17 +31,23 @@ typedef struct {
     char comm[TASKCOMMLEN];
 } ProcInfo;
 
+// ProcList Structure which includes procInfo
 typedef struct {
     ProcInfo *items;
     int count;
     int capacity;
 } ProcList;
 
+// Creating a proclist
 ProcList *create_proclist() {
     ProcList *list = malloc(sizeof(ProcList));
     if (!list) return NULL;
+
+    // initializing proclist
     list->count = 0;
     list->capacity = INITIAL_CAPACITY;
+
+    // allocating memory for items
     list->items = malloc(sizeof(ProcInfo) * list->capacity);
     if (!list->items) {
         free(list);
@@ -49,16 +56,26 @@ ProcList *create_proclist() {
     return list;
 }
 
+// expanding the proclist in case of overflow
 int expand_proclist(ProcList *list) {
+
+    // if count < capacity expand fails
     if (list->count < list->capacity) return 1;
+
+    // new capacity double
     int new_capacity = list->capacity * 2;
+    //reallocating memory
     ProcInfo *new_items = realloc(list->items, sizeof(ProcInfo) * new_capacity);
+    
     if (!new_items) return 0;
+    
+    // updating the list items and capacity
     list->items = new_items;
     list->capacity = new_capacity;
     return 1;
 }
 
+// freeing the proclist if it has items
 void free_proclist(ProcList *list) {
     if (list) {
         if (list->items) free(list->items);
@@ -66,18 +83,24 @@ void free_proclist(ProcList *list) {
     }
 }
 
+// Scanning procfs and populating proclist
 void scanprocfs(ProcList *proclist) {
+
+    // Open /proc directory
     DIR *procdir = opendir("/proc");
     if (!procdir) return;
+
     struct dirent *entry;
     proclist->count = 0;
+
+    // as long as there are entries and we can expand proclist
     while ((entry = readdir(procdir)) && expand_proclist(proclist)) {
         char *endptr;
         pid_t pid = strtol(entry->d_name, &endptr, 10);
         if (*endptr != '\0' || pid <= 0) continue;
         char statpath[PATHMAX];
         snprintf(statpath, sizeof(statpath), "/proc/%d/stat", pid);
-        FILE *statf = fopen(statpath, "r");
+        FILE *statf = fopen(statpath, "r")-
         if (!statf) continue;
         pid_t ppid;
         unsigned long utime, stime, starttime;
@@ -87,16 +110,20 @@ void scanprocfs(ProcList *proclist) {
             continue;
         }
         fclose(statf);
+
+        // for all procs, populate info
         proclist->items[proclist->count].pid = pid;
         proclist->items[proclist->count].ppid = ppid;
         proclist->items[proclist->count].state = state;
         proclist->items[proclist->count].starttime = starttime;
         proclist->items[proclist->count].cputime = utime + stime;
+
         // Parse VmRSS from status
         char statuspath[PATHMAX];
         snprintf(statuspath, sizeof(statuspath), "/proc/%d/status", pid);
         FILE *statusf = fopen(statuspath, "r");
         proclist->items[proclist->count].vmrss = 0;
+        
         if (statusf) {
             char line[256];
             while (fgets(line, sizeof(line), statusf)) {
@@ -108,14 +135,15 @@ void scanprocfs(ProcList *proclist) {
             }
             fclose(statusf);
         }
-        // Approximate creation time (simplified, without precise uptime)
+
+        // Calculate creation time by uptime(time) - starttime
         proclist->items[proclist->count].creationtime = time(NULL) - (starttime / HZ);
         proclist->count++;
-    }
+    }   
     closedir(procdir);
 }
 
-// Find proc index by pid
+// Find proc index by pid from proclist
 int find_proc_index(const ProcList *list, pid_t pid) {
     for (int i = 0; i < list->count; i++) {
         if (list->items[i].pid == pid) return i;
@@ -123,13 +151,13 @@ int find_proc_index(const ProcList *list, pid_t pid) {
     return -1;
 }
 
-// Get ppid
+// Get ppid from proclist by getting pid index and returning its ppid
 pid_t get_ppid(const ProcList *list, pid_t pid) {
     int idx = find_proc_index(list, pid);
     return (idx != -1) ? list->items[idx].ppid : -1;
 }
 
-// Check if target in root subtree
+// Check if target in in root subtree by recursive check of ppids up to root
 int check_process_at_root(const ProcList *list, pid_t root, pid_t target) {
     if (root == target) return 1;
     pid_t current = target;
@@ -139,13 +167,13 @@ int check_process_at_root(const ProcList *list, pid_t root, pid_t target) {
     return (current == root);
 }
 
-// Depth calc
+// Depth calculation increasing depth until root is found
 int handle_dpt(const ProcList *list, pid_t root, pid_t target) {
     int depth = 0;
     pid_t current = target;
     while (current != root && current > 0) {
         current = get_ppid(list, current);
-        depth++;
+        depth = depth + 1;
     }
     return (current == root) ? depth : -1;
 }
@@ -156,9 +184,13 @@ int desc_capacity = 0;
 int desc_count = 0;
 void collect_descendants(const ProcList *proclist, int parent_idx, int exclude_self) {
     desc_count = 0;
+
+    // parsing parent pid by passing parent index and getting its pid 
     pid_t parent_pid = proclist->items[parent_idx].pid;
     for (int i = 0; i < proclist->count; i++) {
         if (proclist->items[i].ppid == parent_pid && (exclude_self || proclist->items[i].pid != parent_pid)) {
+
+            // increasing capacity if count > capacity upto double or set to 256 if 0
             if (desc_count >= desc_capacity) {
                 desc_capacity = desc_capacity ? desc_capacity * 2 : 256;
                 int *new_desc = realloc(descendants, sizeof(int) * desc_capacity);
@@ -179,46 +211,56 @@ void print_dpt(const ProcList *list, pid_t root, pid_t target) {
 }
 
 // 2. all processes at the same level as processid
-void handle_lvl(const ProcList *list, pid_t root, pid_t target) {  
+void handle_lvl(const ProcList *list, pid_t root, pid_t target) {
+
+    // getting target depth
     int target_depth = handle_dpt(list, root, target);
+
+    // for all processes, if depth matches target depth and not root, count it
     int count = 0;
     for (int i = 0; i < list->count; i++) {
         if (list->items[i].pid == root) continue;
         int curr_depth = handle_dpt(list, root, list->items[i].pid);
-        if (curr_depth == target_depth) count++;
+        if (curr_depth == target_depth) count = count + 1;
     }
     printf("No. of processes at the same depth of %d in the process tree %d\n", target, count);
 }
 
-// 3. count of all descendants of processid
+// 3. count all descendants
 void handle_cnt(const ProcList *list, pid_t root, pid_t target) {
     int target_idx = find_proc_index(list, target);
     collect_descendants(list, target_idx, 1);
     printf("%d\n", desc_count);
 }
 
+ProcInfo oldest_desc, newest_desc;
+
 // Helper for oldest/newest
 void find_oldest_newest(const ProcList *list) {
     if (desc_count == 0) return;
+
+    // making the first descendant both oldest and newest
     int first_idx = descendants[0];
-    list->items[first_idx].pid;  // Trigger copy
-    ProcInfo oldest = list->items[first_idx];
-    ProcInfo newest = oldest;
+    list->items[first_idx].pid;
+    ProcInfo old_desc = list->items[first_idx];
+    ProcInfo new_desc = list->items[first_idx];
+
     for (int i = 1; i < desc_count; i++) {
         int idx = descendants[i];
-        if (list->items[idx].starttime < oldest.starttime) {
-            oldest = list->items[idx];
+
+        // lesser starttime means older process
+        if (list->items[idx].starttime < old_desc.starttime) {
+            old_desc = list->items[idx];
         }
-        if (list->items[idx].starttime > newest.starttime) {
-            newest = list->items[idx];
+        // greater starttime means newer process
+        if (list->items[idx].starttime > new_desc.starttime) {
+            new_desc = list->items[idx];
         }
     }
-    // Store in globals for print (simple)
-    oldest_desc = oldest;
-    newest_desc = newest;
+    // Store in globals
+    oldest_desc = old_desc;
+    newest_desc = new_desc;
 }
-
-ProcInfo oldest_desc, newest_desc;
 
 // 4. oldest descendant
 void handle_odt(const ProcList *list, pid_t root, pid_t target) {
@@ -229,14 +271,16 @@ void handle_odt(const ProcList *list, pid_t root, pid_t target) {
         return;
     }
     find_oldest_newest(list);
+
+    // formatting time string
     char timestr[64];
     struct tm *tm = localtime(&oldest_desc.creationtime);
     strftime(timestr, sizeof(timestr), "%a %d %b %Y %I:%M:%S %p %Z", tm);
-    printf("Oldest descendant of %d is %d, whose creation time is %s\n", target, oldest_desc.pid, timestr);
+    printf("Most earliest descendant of %d is %d, whose creation time is: %s\n", target, oldest_desc.pid, timestr);
 }
 
-// 5. most recently created descendant
-void handle_ndt(const ProcList *list, pid_t root, pid_t target) { 
+// 5. newest descendant
+void handle_ndt(const ProcList *list, pid_t root, pid_t target) {
     int target_idx = find_proc_index(list, target);
     collect_descendants(list, target_idx, 1);
     if (desc_count == 0) {
@@ -247,22 +291,25 @@ void handle_ndt(const ProcList *list, pid_t root, pid_t target) {
     printf("Most recently created descendant of %d is %d\n", target, newest_desc.pid);
 }
 
-// 6. count of all non-direct descendants
-void handle_dnd(const ProcList *list, pid_t root, pid_t target) {   
+// 6. count all non-direct descendants
+void handle_dnd(const ProcList *list, pid_t root, pid_t target) {
     int target_idx = find_proc_index(list, target);
     collect_descendants(list, target_idx, 1);
     int direct_count = 0;
     pid_t target_pid = list->items[target_idx].pid;
+
+    // calaculating direct descendants by checking ppid of descendants
     for (int i = 0; i < desc_count; i++) {
         int d_idx = descendants[i];
-        if (list->items[d_idx].ppid == target_pid) direct_count++;
+        if (list->items[d_idx].ppid == target_pid) direct_count = direct_count + 1;
     }
+    // calculating non-direct descendants by subracting direct from total
     int nondirect = desc_count - direct_count;
-    printf("%d\n", nondirect < 0 ? 0 : nondirect);
+    printf("Non-direct desc are: %d\n", nondirect);
 }
 
-// Can kill check
-int can_kill_process(pid_t pid, const char *role) {
+// Helper for kill permissions check
+int can_kill_process(pid_t pid) {
     if (pid == 1) {
         printf("%d is a INIT process and will not be terminated\n", pid);
         return 0;
@@ -284,18 +331,21 @@ int can_kill_process(pid_t pid, const char *role) {
 
 // 7. Kills grandparent
 void handle_kgp(const ProcList *list, pid_t root, pid_t target) {
+    // get parent pid
     pid_t parent = get_ppid(list, target);
     if (parent == -1) {
         printf("No parent for process %d\n", target);
         return;
     }
+    // get grandparent pid
     pid_t grand = get_ppid(list, parent);
     if (grand == -1) {
         printf("No grandparent for process %d\n", target);
         return;
     }
-    if (can_kill_process(grand, "Grandparent")) {
-        printf("Killing grandparent %d\n", grand);
+    // check permissions and kill
+    if (can_kill_process(grand)) {
+        printf("Killing grandparent...: %d\n", grand);
         if (kill(grand, SIGKILL) == 0) {
             printf("%d is terminated\n", grand);
         } else {
@@ -311,7 +361,7 @@ void handle_kpp(const ProcList *list, pid_t root, pid_t target) {
         printf("No parent for process %d\n", target);
         return;
     }
-    if (can_kill_process(parent, "Parent")) {
+    if (can_kill_process(parent)) {
         printf("Killing parent %d\n", parent);
         if (kill(parent, SIGKILL) == 0) {
             printf("%d is terminated\n", parent);
@@ -330,13 +380,14 @@ void handle_ksp(const ProcList *list, pid_t root, pid_t target) {
     }
     int killed_count = 0;
     for (int i = 0; i < list->count; i++) {
+        // if the ppid matches parent and pid is not target, it's a sibling
         if (list->items[i].ppid == parent && list->items[i].pid != target) {
             pid_t sib = list->items[i].pid;
-            if (can_kill_process(sib, "Sibling")) {
+            if (can_kill_process(sib)) {
                 printf("Killing sibling %d\n", sib);
                 if (kill(sib, SIGKILL) == 0) {
                     printf("SIGKILL was sent to %d\n", sib);
-                    killed_count++;
+                    killed_count = killed_count + 1;
                 } else {
                     printf("Failed to kill sibling %d\n", sib);
                 }
@@ -345,34 +396,39 @@ void handle_ksp(const ProcList *list, pid_t root, pid_t target) {
     }
 }
 
-// 10. Kills siblings of parent (uncles/aunts)
-void handle_kps(const ProcList *list, pid_t root, pid_t target) {   
+// 10. Kills siblings of parent
+void handle_kps(const ProcList *list, pid_t root, pid_t target) {
     pid_t parent = get_ppid(list, target);
-    if (parent == -1) return;
+    if (parent == -1) {
+        printf("No grandparent for process %d\n", target);
+        return;
+    }
+
     pid_t grand = get_ppid(list, parent);
     if (grand == -1) {
         printf("No grandparent for process %d\n", target);
         return;
     }
     int killed_count = 0;
+    // if the ppid matches grandparent and pid is not target, it's a parents sibling uncle
     for (int i = 0; i < list->count; i++) {
         if (list->items[i].ppid == grand && list->items[i].pid != parent) {
             pid_t ua = list->items[i].pid;
-            if (can_kill_process(ua, "UncleAunt")) {
-                printf("Killing uncleaunt %d\n", ua);
+            if (can_kill_process(ua)) {
+                printf("Killing uncle %d\n", ua);
                 if (kill(ua, SIGKILL) == 0) {
                     printf("%d is terminated\n", ua);
-                    killed_count++;
+                    killed_count = killed_count + 1;
                 } else {
-                    printf("Failed to kill uncleaunt %d\n", ua);
+                    printf("Failed to kill uncle %d\n", ua);
                 }
             }
         }
     }
 }
 
-// 11. Kills grandchildren (-kgc)
-void handle_kgc(const ProcList *list, pid_t root, pid_t target) {  
+// 11. Kills grandchildren
+void handle_kgc(const ProcList *list, pid_t root, pid_t target) {
     int target_idx = find_proc_index(list, target);
     // Collect children indices
     int *children = NULL;
@@ -381,6 +437,8 @@ void handle_kgc(const ProcList *list, pid_t root, pid_t target) {
     pid_t target_pid = list->items[target_idx].pid;
     for (int i = 0; i < list->count; i++) {
         if (list->items[i].ppid == target_pid) {
+
+            // reallocating children array if count > capacity
             if (child_count >= child_cap) {
                 child_cap = child_cap ? child_cap * 2 : 64;
                 int *new_children = realloc(children, sizeof(int) * child_cap);
@@ -393,14 +451,15 @@ void handle_kgc(const ProcList *list, pid_t root, pid_t target) {
             children[child_count++] = i;
         }
     }
-    // For each child, kill their children (grandchildren)
+    // For each child, get thier child (grandchild) and kill them
     for (int c = 0; c < child_count; c++) {
         int child_idx = children[c];
         pid_t child_pid = list->items[child_idx].pid;
+
         for (int i = 0; i < list->count; i++) {
             if (list->items[i].ppid == child_pid) {
                 pid_t grandc = list->items[i].pid;
-                if (can_kill_process(grandc, "Grandchild")) {
+                if (can_kill_process(grandc)) {
                     printf("Killing grandchild %d\n", grandc);
                     if (kill(grandc, SIGKILL) == 0) {
                         printf("%d is terminated\n", grandc);
@@ -414,17 +473,17 @@ void handle_kgc(const ProcList *list, pid_t root, pid_t target) {
     free(children);
 }
 
-// 12. Kills children (-kcp)
-void handle_kcp(const ProcList *list, pid_t root, pid_t target) {  
+// 12. Kills children
+void handle_kcp(const ProcList *list, pid_t root, pid_t target) {
     int killed_count = 0;
     for (int i = 0; i < list->count; i++) {
         if (list->items[i].ppid == target) {
             pid_t child = list->items[i].pid;
-            if (can_kill_process(child, "Child")) {
+            if (can_kill_process(child)) {
                 printf("Killing child %d\n", child);
                 if (kill(child, SIGKILL) == 0) {
                     printf("SIGKILL was sent to %d\n", child);
-                    killed_count++;
+                    killed_count = killed_count + 1;
                 } else {
                     printf("Failed to kill child\n");
                 }
@@ -433,12 +492,13 @@ void handle_kcp(const ProcList *list, pid_t root, pid_t target) {
     }
 }
 
-// 13. Kills subtree in creation order (-kst)
-void handle_kst(const ProcList *list, pid_t root, pid_t target) {   
+// 13. Kills subtree in creation order
+void handle_kst(const ProcList *list, pid_t root, pid_t target) {
     int target_idx = find_proc_index(list, target);
     collect_descendants(list, target_idx, 1);
     if (desc_count == 0) return;
-    // Sort descendants ascending starttime (oldest first)
+
+    // Sort descendants ascending starttime (oldest first) selection sort
     for (int i = 0; i < desc_count - 1; i++) {
         for (int j = i + 1; j < desc_count; j++) {
             if (list->items[descendants[i]].starttime > list->items[descendants[j]].starttime) {
@@ -448,13 +508,16 @@ void handle_kst(const ProcList *list, pid_t root, pid_t target) {
             }
         }
     }
+
     // Kill in order, print PID and time
     for (int i = 0; i < desc_count; i++) {
         int idx = descendants[i];
         pid_t pid = list->items[idx].pid;
-        if (can_kill_process(pid, "Subtree")) {
+
+        if (can_kill_process(pid)) {
             printf("Killing %d (created %ld)\n", pid, list->items[idx].starttime);
             if (kill(pid, SIGKILL) == 0) {
+                // formatting time string
                 char timestr[64];
                 struct tm *tm = localtime(&list->items[idx].creationtime);
                 strftime(timestr, sizeof(timestr), "%a %d %b %Y %I:%M:%S %p %Z", tm);
@@ -466,36 +529,36 @@ void handle_kst(const ProcList *list, pid_t root, pid_t target) {
     }
 }
 
-// 14. SIGSTOP descendants (-dst)
-void handle_dst(const ProcList *list, pid_t root, pid_t target) { 
+// 14. SIGSTOP descendants
+void handle_dst(const ProcList *list, pid_t root, pid_t target) {
     int target_idx = find_proc_index(list, target);
     collect_descendants(list, target_idx, 1);
     for (int i = 0; i < desc_count; i++) {
         pid_t pid = list->items[descendants[i]].pid;
-        if (can_kill_process(pid, "Descendant")) {
+        if (can_kill_process(pid)) {
             kill(pid, SIGSTOP);
             printf("SIGSTOP sent to %d\n", pid);
         }
     }
 }
 
-// 15. SIGCONT stopped descendants (-dct)
-void handle_dct(const ProcList *list, pid_t root, pid_t target) { 
+// 15. SIGCONT stopped descendants
+void handle_dct(const ProcList *list, pid_t root, pid_t target) {
     int target_idx = find_proc_index(list, target);
     collect_descendants(list, target_idx, 1);
     for (int i = 0; i < desc_count; i++) {
         int d_idx = descendants[i];
         pid_t pid = list->items[d_idx].pid;
-        if (list->items[d_idx].state == 'T' && can_kill_process(pid, "Descendant")) {
+        if (list->items[d_idx].state == 'T' && can_kill_process(pid)) {
             kill(pid, SIGCONT);
             printf("SIGCONT sent to %d\n", pid);
         }
     }
 }
 
-// 16. Kill root (-krp)
-void handle_krp(const ProcList *list, pid_t root, pid_t target) { 
-    if (can_kill_process(root, "Root")) {
+// 16. Kill root
+void handle_krp(const ProcList *list, pid_t root, pid_t target) {
+    if (can_kill_process(root)) {
         printf("Killing root %d\n", root);
         if (kill(root, SIGKILL) == 0) {
             printf("%d is terminated\n", root);
@@ -530,36 +593,44 @@ unsigned long find_max_cpu(const ProcList *list, int target_idx) {
     return max_cpu;
 }
 
-// 17. Most memory descendant (-mmd)
+// 17. Most memory descendant
 void handle_mmd(const ProcList *list, pid_t root, pid_t target) {
     int target_idx = find_proc_index(list, target);
     long max_vmrss = find_max_vmrss(list, target_idx);
     int listed = 0;
+    
     printf("Descendant(s) of %d consuming most memory. VmRSS %ld bytes:\n", target, max_vmrss);
+    
+    // in case of multiple descendants with same max vmrss (tie)
     for (int i = 0; i < list->count; i++) {
         if (check_process_at_root(list, target, list->items[i].pid) && list->items[i].vmrss == max_vmrss) {
             printf("%d ", list->items[i].pid);
-            listed++;
+            listed = listed + 1;
         }
     }
-    if (listed == 0) printf("No descendants\n");
-    printf("\n");
+    if (listed == 0) {
+        printf("No descendants\n");
+    }
 }
 
-// 18. Most CPU descendant (-mpd)
+// 18. Most CPU descendant
 void handle_mpd(const ProcList *list, pid_t root, pid_t target) {
     int target_idx = find_proc_index(list, target);
     unsigned long max_cpu = find_max_cpu(list, target_idx);
     int listed = 0;
+
     printf("Descendant(s) of %d with most CPU time. Total %lu clock ticks:\n", target, max_cpu);
+    
+    // in case of multiple descendants with same max cputime (tie)
     for (int i = 0; i < list->count; i++) {
         if (check_process_at_root(list, target, list->items[i].pid) && list->items[i].cputime == max_cpu) {
             printf("%d ", list->items[i].pid);
-            listed++;
+            listed = listed + 1;
         }
     }
-    if (listed == 0) printf("No descendants\n");
-    printf("\n");
+    if (listed == 0) {
+        printf("No descendants\n");
+    }
 }
 
 // Bash count helpers
@@ -578,7 +649,8 @@ int count_bcp(const ProcList *list) {
     int count = 0;
     pid_t self_pid = getpid();
     for (int i = 0; i < list->count; i++) {
-        if (is_bash_subtree(list, list->items[i].pid) && list->items[i].pid != self_pid) count++;
+        if (is_bash_subtree(list, list->items[i].pid) && list->items[i].pid != self_pid)
+            count = count + 1;
     }
     return count;
 }
@@ -591,7 +663,8 @@ void handle_bcp(ProcList *list) {
 int count_bop(const ProcList *list) {
     int count = 0;
     for (int i = 0; i < list->count; i++) {
-        if (!is_bash_subtree(list, list->items[i].pid) && list->items[i].pid > 1) count++;
+        if (!is_bash_subtree(list, list->items[i].pid) && list->items[i].pid > 1)
+            count = count + 1;
     }
     return count;
 }
@@ -604,15 +677,17 @@ void handle_bop(ProcList *list) {
 int main(int num_args, char *arguments[]) {
 
     if (num_args != 2 && num_args != 3 && num_args != 4) {
-        printf("Invalid command\n");
+        printf("Invalid number of arguments\n");
         return 1;
     }
 
+    // Creating proc list
     ProcList *proclist = create_proclist();
     if (!proclist) {
-        printf("Memory allocation failed\n");
+        printf("Memory allocation failed for proc list\n");
         return 1;
     }
+    // scanning proc
     scanprocfs(proclist);
 
     if (num_args == 2) {
