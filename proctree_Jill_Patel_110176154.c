@@ -98,9 +98,11 @@ void scanprocfs(ProcList *proclist) {
         char *endptr;
         pid_t pid = strtol(entry->d_name, &endptr, 10);
         if (*endptr != '\0' || pid <= 0) continue;
+
         char statpath[PATHMAX];
         snprintf(statpath, sizeof(statpath), "/proc/%d/stat", pid);
-        FILE *statf = fopen(statpath, "r")-
+        
+        FILE *statf = fopen(statpath, "r");
         if (!statf) continue;
         pid_t ppid;
         unsigned long utime, stime, starttime;
@@ -735,15 +737,24 @@ int main(int num_args, char *arguments[]) {
         // option received
         // Array of valid commands
         const char *commands[] = {
-            "-dpt", "-lvl", "-cnt", "-odt", "-ndt", "-dnd", "-kgp", "-kpp", "-ksp", "-kps", "-kgc", "-kcp", "-kst", "-dst", "-dct", "-krp", "-mmd", "-mpd", "-bcp", "-bop"
+            "-dpt", "-lvl", "-cnt", "-odt", "-ndt", "-dnd", "-kgp", "-kpp", "-ksp", "-kps", "-kgc", "-kcp", "-kst", "-dst", "-dct", "-krp", "-mmd", "-mpd"
         };
 
         for (int i = 0; i < sizeof(commands) / sizeof(commands[0]); i++) {
-            
-            if (strcmp(arguments[1], commands[i]) == 0) {
 
+            char *option = arguments[3];
+            if (strcmp(option, commands[i]) == 0) {
+
+                // sting to int conversion
                 pid_t root_process = atoi(arguments[1]);
                 pid_t process_id = atoi(arguments[2]);
+
+                if (root_process <= 0 || process_id <= 0) {
+                    printf("Invalid PID: %d or %d\n", root_process, process_id);
+                    free_proclist(proclist);
+                    if (descendants) free(descendants);
+                    return 1;
+                }
 
                 if (check_process_at_root(proclist, root_process, process_id)) {
                     
@@ -808,8 +819,6 @@ int main(int num_args, char *arguments[]) {
 
                 } else {
                     printf("Process %d does not belong to the process subtree rooted at %d\n", process_id, root_process);
-                    free_proclist(proclist);
-                    free(descendants);
                     return 1;
                 }
             }

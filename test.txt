@@ -1,0 +1,16 @@
+./proctree MAINPID CHILDPID
+./proctree MAINPID CHILDPID -dpt
+./proctree MAINPID CHILDPID -lvl
+./proctree MAINPID CHILDPID -cnt
+./proctree MAINPID CHILDPID -odt
+./proctree MAINPID CHILDPID -ndt
+./proctree MAINPID CHILDPID -dnd
+./proctree MAINPID CHILDPID -mmd
+./proctree MAINPID CHILDPID -mpd
+./proctree -bcp
+./proctree -bop
+./proctree MAINPID CHILDPID
+./proctree MAINPID CHILDPID -dst
+./proctree MAINPID CHILDPID -dct
+./proctree MAINPID CHILDPID -kcp
+./proctree MAINPID CHILDPID -kpp
